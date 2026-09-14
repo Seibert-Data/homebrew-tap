@@ -27,6 +27,12 @@ jobs:
           tap_dir="$(brew --repository)/Library/Taps/seibert-data/homebrew-tap"
           cp -f Casks/*.rb "$tap_dir/Casks/"
 
+      # Homebrew 7 refuses to load a cask from an untrusted third-party tap
+      # ("Refusing to load cask ... from untrusted tap"). A fresh CI runner starts
+      # untrusted, so trust the tap before auditing it.
+      - name: Trust the tap
+        run: brew trust seibert-data/tap
+
       # Audit by NAME, not by path: `brew audit <path>` is disabled in Homebrew 7+
       # ("Use `brew audit [name ...]` instead"). `--strict` additionally verifies the
       # version, URLs and sha256 against the upstream release.
