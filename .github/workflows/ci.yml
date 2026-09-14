@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+# Cancel superseded runs on a PR push — macOS runners queue slowly, and an
+# outdated audit tells you nothing about the current head.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The job MUST be named `test` — the repo's `master-protection` ruleset requires a
+  # `test` status check on the default branch (public repos require it; private ones
+  # skip it). Without this job the required check never runs and every PR stays
+  # BLOCKED forever.
+  test:
+    # Least privilege: this job only checks out and audits. It also evaluates
+    # contributor-supplied Ruby (`brew audit` loads the cask), so a read-only token
+    # bounds the blast radius on `pull_request` runs.
+    permissions:
+      contents: read
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      # No credentials needed: `brew tap` clones a public repo and this job never
+      # pushes. Not persisting them keeps the token out of .git/config, which the
+      # contributor-supplied cask Ruby evaluated below could otherwise read.
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Tap this repo
+        run: brew tap Seibert-Data/tap "https://github.com/${GITHUB_REPOSITORY}"
+
+      # `brew tap` clones the default branch, so copy the checked-out Casks over it —
+      # otherwise the audit would test main instead of the pull request's changes.
+      - name: Sync the checked-out Casks into the tap
+        run: |
+          # nullglob + an explicit empty check: without them a casks-free Casks/ hands
+          # the literal pattern to `cp` and dies with an opaque `cannot stat`.
+          shopt -s nullglob
+          casks=(Casks/*.rb)
+          if [ ${#casks[@]} -eq 0 ]; then
+            echo "::error::no casks found in Casks/ — nothing to sync"
+            exit 1
+          fi
+          # Derive the path from the tap name rather than hardcoding the lowercased
+          # owner segment, so it cannot diverge from what `brew tap` resolved above.
+          tap_dir="$(brew --repository Seibert-Data/tap)"
+          cp -f "${casks[@]}" "$tap_dir/Casks/"
+
+      # Homebrew 7 refuses to load a cask from an untrusted third-party tap
+      # ("Refusing to load cask ... from untrusted tap"). A fresh CI runner starts
+      # untrusted, so trust the tap before auditing it.
+      - name: Trust the tap
+        run: brew trust seibert-data/tap
+
+      # Audit by NAME, not by path: `brew audit <path>` is disabled in Homebrew 7+
+      # ("Use `brew audit [name ...]` instead").
+      #
+      # `--online` is REQUIRED for artifact verification and is NOT implied by
+      # `--strict` — --strict only adds stricter style cops. Verified locally:
+      # `--strict` runs in ~2s with no download, `--strict --online` prints
+      # "Downloading and extracting artifacts" and takes ~4s. Without it, a dead URL
+      # or a stale sha256 in the GoReleaser-generated cask still audits green.
+      - name: Audit casks
+        run: |
+          # nullglob + explicit empty check: an unmatched pattern stays literal, so an
+          # empty Casks/ would otherwise audit nothing and report a green check.
+          shopt -s nullglob
+          casks=(Casks/*.rb)
+          if [ ${#casks[@]} -eq 0 ]; then
+            echo "::error::no casks found in Casks/ — refusing to report a green audit"
+            exit 1
+          fi
+          # Aggregate failures: the implicit `bash -e` aborts on the first bad cask and
+          # hides the rest, costing one CI round-trip per broken cask.
+          failed=0
+          for cask in "${casks[@]}"; do
+            brew audit --cask --strict --online "$(basename "${cask%.rb}")" || failed=1
+          done
+          exit "$failed"
