@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  # The job MUST be named `test` — the repo's `master-protection` ruleset requires a
+  # `test` status check on the default branch (public repos require it; private ones
+  # skip it). Without this job the required check never runs and every PR stays
+  # BLOCKED forever.
+  test:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Tap this repo
+        run: brew tap Seibert-Data/tap "https://github.com/${GITHUB_REPOSITORY}"
+
+      # `brew tap` clones the default branch, so copy the checked-out Casks over it —
+      # otherwise the audit would test main instead of the pull request's changes.
+      - name: Sync the checked-out Casks into the tap
+        run: |
+          tap_dir="$(brew --repository)/Library/Taps/seibert-data/homebrew-tap"
+          cp -f Casks/*.rb "$tap_dir/Casks/"
+
+      # Audit by NAME, not by path: `brew audit <path>` is disabled in Homebrew 7+
+      # ("Use `brew audit [name ...]` instead"). `--strict` additionally verifies the
+      # version, URLs and sha256 against the upstream release.
+      - name: Audit casks
+        run: |
+          for cask in Casks/*.rb; do
+            brew audit --cask --strict "$(basename "${cask%.rb}")"
+          done
