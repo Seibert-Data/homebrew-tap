@@ -12,6 +12,11 @@ jobs:
   # skip it). Without this job the required check never runs and every PR stays
   # BLOCKED forever.
   test:
+    # Least privilege: this job only checks out and audits. It also evaluates
+    # contributor-supplied Ruby (`brew audit` loads the cask), so a read-only token
+    # bounds the blast radius on `pull_request` runs.
+    permissions:
+      contents: read
     runs-on: macos-latest
     timeout-minutes: 20
     steps:
@@ -24,7 +29,9 @@ jobs:
       # otherwise the audit would test main instead of the pull request's changes.
       - name: Sync the checked-out Casks into the tap
         run: |
-          tap_dir="$(brew --repository)/Library/Taps/seibert-data/homebrew-tap"
+          # Derive the path from the tap name rather than hardcoding the lowercased
+          # owner segment, so it cannot diverge from what `brew tap` resolved above.
+          tap_dir="$(brew --repository Seibert-Data/tap)"
           cp -f Casks/*.rb "$tap_dir/Casks/"
 
       # Homebrew 7 refuses to load a cask from an untrusted third-party tap
@@ -38,6 +45,9 @@ jobs:
       # version, URLs and sha256 against the upstream release.
       - name: Audit casks
         run: |
+          # Without nullglob an unmatched pattern stays literal, so an empty Casks/
+          # would invoke `brew audit` with the bogus name `*` instead of skipping.
+          shopt -s nullglob
           for cask in Casks/*.rb; do
             brew audit --cask --strict "$(basename "${cask%.rb}")"
           done
