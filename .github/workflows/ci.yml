@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [ main ]
 
+# Cancel superseded runs on a PR push — macOS runners queue slowly, and an
+# outdated audit tells you nothing about the current head.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # The job MUST be named `test` — the repo's `master-protection` ruleset requires a
   # `test` status check on the default branch (public repos require it; private ones
